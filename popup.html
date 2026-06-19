@@ -468,6 +468,73 @@
       transition: color 0.15s;
     }
     .dev-footer a:hover { color: #cba6f7; }
+
+    .profile-save-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .profile-save-row input[type=text] {
+      flex: 1;
+      min-width: 0;
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      color: #cdd6f4;
+      padding: 5px 8px;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .profile-save-row input[type=text]:focus { border-color: #cba6f7; }
+    .btn-profile-save {
+      background: #45475a;
+      border: none;
+      color: #cdd6f4;
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .btn-profile-save:hover { background: #585b70; }
+
+    .profile-list { display: flex; flex-direction: column; gap: 6px; }
+    .profile-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #1e1e2e;
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .profile-name {
+      flex: 1;
+      font-size: 12px;
+      color: #cdd6f4;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .btn-profile-load {
+      background: none;
+      border: 1px solid #45475a;
+      color: #89b4fa;
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .btn-profile-load:hover { border-color: #89b4fa; }
+    .profile-empty {
+      font-size: 11px;
+      color: #45475a;
+      text-align: center;
+      padding: 6px 0;
+    }
   </style>
 </head>
 <body>
@@ -595,6 +662,16 @@
     <p class="hint">Add, remove, replace, or substring-replace classes on elements by CSS selector — without any text replacement.</p>
     <div class="rule-list" id="classOpsRules"></div>
     <button class="btn-add" id="addClassOpsRule">+ Add Rule</button>
+  </section>
+
+  <section>
+    <h2>Profiles</h2>
+    <p class="hint">Save the current settings under a name and reload them any time.</p>
+    <div class="profile-save-row">
+      <input type="text" id="profileNameInput" placeholder="Profile name…" maxlength="60" />
+      <button class="btn-profile-save" id="saveProfile">Save</button>
+    </div>
+    <div class="profile-list" id="profileList"></div>
   </section>
 
   <button class="btn-save" id="save">Save &amp; Apply</button>

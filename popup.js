@@ -1372,6 +1372,88 @@ document.getElementById("save").addEventListener("click", () => {
   });
 });
 
+// ── Profiles ─────────────────────────────────────────────────────
+
+const profileListEl    = document.getElementById("profileList");
+const profileNameInput = document.getElementById("profileNameInput");
+
+function renderProfiles(profiles) {
+  profileListEl.innerHTML = "";
+  const names = Object.keys(profiles || {});
+  if (!names.length) {
+    const empty = document.createElement("div");
+    empty.className = "profile-empty";
+    empty.textContent = "No saved profiles yet.";
+    profileListEl.appendChild(empty);
+    return;
+  }
+  names.forEach((name) => {
+    const item = document.createElement("div");
+    item.className = "profile-item";
+
+    const lbl = document.createElement("span");
+    lbl.className = "profile-name";
+    lbl.title = name;
+    lbl.textContent = name;
+
+    const loadBtn = document.createElement("button");
+    loadBtn.className = "btn-profile-load";
+    loadBtn.textContent = "Load";
+    loadBtn.addEventListener("click", () => {
+      chrome.storage.local.get("profiles", (res) => {
+        const saved = (res.profiles || {})[name];
+        if (!saved) return;
+        chrome.storage.sync.set(saved, () => {
+          statusEl.textContent = `Profile "${name}" loaded!`;
+          setTimeout(() => (statusEl.textContent = ""), 3000);
+          loadFromStorage();
+        });
+      });
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn-remove";
+    delBtn.title = "Delete profile";
+    delBtn.textContent = "×";
+    delBtn.addEventListener("click", () => {
+      chrome.storage.local.get("profiles", (res) => {
+        const updated = res.profiles || {};
+        delete updated[name];
+        chrome.storage.local.set({ profiles: updated }, () => renderProfiles(updated));
+      });
+    });
+
+    item.append(lbl, loadBtn, delBtn);
+    profileListEl.appendChild(item);
+  });
+}
+
+function loadProfiles() {
+  chrome.storage.local.get("profiles", (res) => renderProfiles(res.profiles || {}));
+}
+
+document.getElementById("saveProfile").addEventListener("click", () => {
+  const name = profileNameInput.value.trim();
+  if (!name) {
+    statusEl.textContent = "Enter a profile name first.";
+    setTimeout(() => (statusEl.textContent = ""), 2000);
+    return;
+  }
+  chrome.storage.sync.get(ALL_KEYS, (current) => {
+    chrome.storage.local.get("profiles", (res) => {
+      const updated = { ...(res.profiles || {}), [name]: current };
+      chrome.storage.local.set({ profiles: updated }, () => {
+        profileNameInput.value = "";
+        statusEl.textContent = `Profile "${name}" saved!`;
+        setTimeout(() => (statusEl.textContent = ""), 3000);
+        renderProfiles(updated);
+      });
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+
 const ALL_KEYS = ["rules", "colorRules", "hideRules", "disableRules", "swapRules", "customCssRules", "classOpsRules", "enabled", "textRulesEnabled", "colorRulesEnabled", "colorScopeReplaced", "hideEnabled", "disableEnabled", "swapEnabled", "customCssEnabled", "classOpsEnabled"];
 
 document.getElementById("exportSettings").addEventListener("click", () => {
@@ -1427,4 +1509,5 @@ document.getElementById("importFile").addEventListener("change", (e) => {
 });
 
 loadFromStorage();
+loadProfiles();
 checkPendingSelector();
