@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Text Replacer & Color Changer",
+  "name": "Web Editor",
   "version": "1.0.0",
   "description": "Replace specific text and change non-default text/background colors on any page.",
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
@@ -16,8 +16,9 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "css": ["no-flash.css"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
   "icons": {

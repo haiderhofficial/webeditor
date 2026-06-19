@@ -1,0 +1,4 @@
+/* Injected at document_start by the manifest — hides the page until the
+   extension has applied all rules. The content script adds .ext-ready to
+   <html> after runAll() completes, which removes this rule. */
+html:not(.ext-ready) { visibility: hidden !important; }

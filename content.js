@@ -1,3 +1,56 @@
+if (window.__webEditorLoaded) throw new Error("Web Editor: already loaded");
+window.__webEditorLoaded = true;
+
+// no-flash.css (injected via manifest at document_start) hides the page with:
+//   html:not(.ext-ready) { visibility: hidden !important; }
+// In addition, we synchronously inject a targeted pre-hide style from the
+// localStorage cache built on the previous run, hiding specific elements even
+// faster. _reveal() adds .ext-ready to <html> to show everything.
+const _reveal = (() => {
+  // Synchronous read — localStorage is available at document_start
+  try {
+    const css = localStorage.getItem("__ext_prehide__");
+    if (css) {
+      const ps = document.createElement("style");
+      ps.id = "ext-pre-hide";
+      ps.textContent = css;
+      document.documentElement.appendChild(ps);
+    }
+  } catch (_) {}
+  // Safety: always reveal within 3 s in case runAll() never fires
+  const t = setTimeout(() => document.documentElement.classList.add("ext-ready"), 3000);
+  return () => { clearTimeout(t); document.documentElement.classList.add("ext-ready"); };
+})();
+
+// Called at the end of every runAll() to refresh the localStorage cache.
+// Collects every active selector from hide / disable / swap / custom-CSS rules
+// so the next page load can inject them synchronously before first paint.
+function _updatePreHideCache(data) {
+  try {
+    if (data.enabled === false) { localStorage.removeItem("__ext_prehide__"); return; }
+    const sels = [];
+    const collect = (rules, globalOn, fn) => {
+      if (globalOn !== false) (rules || []).forEach(r => { if (r.enabled !== false) fn(r); });
+    };
+    collect(data.hideRules,       data.hideEnabled,      r => r.selector  && sels.push(r.selector));
+    collect(data.disableRules,    data.disableEnabled,   r => r.selector  && sels.push(r.selector));
+    collect(data.customCssRules,  data.customCssEnabled, r => r.selector  && sels.push(r.selector));
+    collect(data.swapRules,       data.swapEnabled,      r => {
+      if (r.selectorA) sels.push(r.selectorA);
+      if (r.selectorB) sels.push(r.selectorB);
+    });
+    // Also pre-hide text-rule target scopes (if any)
+    collect(data.rules, data.textRulesEnabled, r =>
+      (r.targetSelectors || []).forEach(s => s && sels.push(s))
+    );
+    if (sels.length) {
+      localStorage.setItem("__ext_prehide__", `${sels.join(",")}{visibility:hidden!important}`);
+    } else {
+      localStorage.removeItem("__ext_prehide__");
+    }
+  } catch (_) {}
+}
+
 // Normalize any CSS color to a canonical string for comparison.
 // Preserves alpha: rgba(r,g,b,0.16) stays rgba; rgb/hex without alpha → rgb().
 function normalizeColor(str) {
@@ -72,6 +125,14 @@ function applyClassOps(el, classOps) {
   }
 }
 
+// Returns true if el or any ancestor matches any selector in the array
+function elementMatchesAny(el, selectors) {
+  if (!selectors || selectors.length === 0) return false;
+  return selectors.some(sel => {
+    try { return !!el.closest(sel); } catch { return false; }
+  });
+}
+
 // Applies text replacement rules and returns the set of parent elements that were changed.
 function applyRules(rules) {
   const affectedElements = new Set();
@@ -93,8 +154,17 @@ function applyRules(rules) {
     let value = textNode.nodeValue;
     const matchedRules = [];
 
+    const parent = textNode.parentElement;
+
     for (const rule of rules) {
       if (!rule.find || rule.replace == null) continue;
+
+      // Scope checks — run against the text node's parent element
+      if (parent) {
+        if (rule.targetSelectors?.length && !elementMatchesAny(parent, rule.targetSelectors)) continue;
+        if (rule.exceptSelectors?.length &&  elementMatchesAny(parent, rule.exceptSelectors)) continue;
+      }
+
       const flags = rule.caseSensitive ? "g" : "gi";
       const escaped = rule.find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const regex = new RegExp(escaped, flags);
@@ -106,7 +176,6 @@ function applyRules(rules) {
 
     if (matchedRules.length) {
       textNode.nodeValue = value;
-      const parent = textNode.parentElement;
       if (parent) {
         matchedRules.forEach((rule) => applyClassOps(parent, rule.classOps));
         matchedRules.forEach((rule) => applyStyleOps(parent, rule.styleOps));
@@ -173,10 +242,84 @@ function applyColorRules(colorRules, targetElements) {
   }
 }
 
-function applyHideRules(hideRules) {
-  if (!hideRules || hideRules.length === 0) return;
+function applyClassOpsRules(classOpsRules, classOpsEnabled) {
+  if (!classOpsEnabled || !classOpsRules?.length) return;
+  for (const rule of classOpsRules) {
+    if (rule.enabled === false || !rule.selector) continue;
+    try {
+      const els = document.querySelectorAll(rule.selector);
+      for (const el of els) applyClassOps(el, rule.classOps);
+    } catch {
+      // invalid selector — skip silently
+    }
+  }
+}
+
+function applyCustomCssRules(rules, enabled) {
+  document.getElementById("ext-custom-css")?.remove();
+  if (!enabled || !rules?.length) return;
+  const active = rules.filter(r => r.enabled !== false && r.selector && r.css);
+  if (!active.length) return;
+  const style = document.createElement("style");
+  style.id = "ext-custom-css";
+  style.textContent = active.map(r => `${r.selector} { ${r.css} }`).join("\n");
+  (document.head || document.documentElement).appendChild(style);
+}
+
+function applyDisableRules(disableRules, disableEnabled) {
+  if (!disableEnabled || !disableRules || disableRules.length === 0) return;
+  for (const rule of disableRules) {
+    if (rule.enabled === false || !rule.selector) continue;
+    try {
+      const els = document.querySelectorAll(rule.selector);
+      for (const el of els) {
+        // inert blocks all interaction: clicks, keyboard, focus, form submission
+        el.inert = true;
+        el.style.setProperty("cursor", "pointer", "important");
+        if (rule.dimmed !== false) {
+          el.style.setProperty("opacity", "0.5", "important");
+        }
+      }
+    } catch {
+      // invalid selector — skip silently
+    }
+  }
+}
+
+function applySwapRules(swapRules, swapEnabled) {
+  if (!swapEnabled || !swapRules || swapRules.length === 0) return;
+  for (const rule of swapRules) {
+    if (rule.enabled === false || !rule.selectorA || !rule.selectorB) continue;
+    try {
+      const a = document.querySelector(rule.selectorA);
+      const b = document.querySelector(rule.selectorB);
+      if (!a || !b || a === b) continue;
+
+      if (rule.mode === "css") {
+        // Visual-only: translate each element to the other's screen position
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        const dx = rb.left - ra.left;
+        const dy = rb.top  - ra.top;
+        a.style.setProperty("transform", `translate(${dx}px, ${dy}px)`,  "important");
+        b.style.setProperty("transform", `translate(${-dx}px, ${-dy}px)`, "important");
+      } else {
+        // DOM swap: physically move elements in the tree
+        const placeholder = document.createComment("ext-swap");
+        a.replaceWith(placeholder);
+        b.replaceWith(a);
+        placeholder.replaceWith(b);
+      }
+    } catch {
+      // invalid selector or detached node — skip silently
+    }
+  }
+}
+
+function applyHideRules(hideRules, hideEnabled) {
+  if (!hideEnabled || !hideRules || hideRules.length === 0) return;
   for (const rule of hideRules) {
-    if (!rule.selector) continue;
+    if (!rule.selector || rule.enabled === false) continue;
     try {
       const els = document.querySelectorAll(rule.selector);
       for (const el of els) {
@@ -195,13 +338,47 @@ function applyHideRules(hideRules) {
 }
 
 function runAll() {
-  chrome.storage.sync.get(["rules", "colorRules", "hideRules", "enabled", "colorScopeReplaced"], (data) => {
-    if (data.enabled === false) return;
-    const affectedElements = applyRules(data.rules || []);
-    const targets = data.colorScopeReplaced ? affectedElements : undefined;
-    applyColorRules(data.colorRules || [], targets);
-    applyHideRules(data.hideRules || []);
-  });
+  // If the extension was reloaded/updated, the context is gone — stop gracefully
+  if (!chrome?.runtime?.id) {
+    observer?.disconnect();
+    observer = null;
+    return;
+  }
+
+  // Disconnect before any DOM mutations so our own changes don't re-trigger runAll
+  observer?.disconnect();
+
+  try { chrome.storage.sync.get(["rules", "colorRules", "hideRules", "disableRules", "swapRules", "customCssRules", "classOpsRules", "enabled", "textRulesEnabled", "colorRulesEnabled", "colorScopeReplaced", "hideEnabled", "disableEnabled", "swapEnabled", "customCssEnabled", "classOpsEnabled"], (data) => {
+    if (data.enabled !== false) {
+      let affectedElements = new Set();
+      if (data.textRulesEnabled !== false) {
+        const activeRules = (data.rules || []).filter(r => r.enabled !== false);
+        affectedElements = applyRules(activeRules);
+      }
+
+      if (data.colorRulesEnabled !== false) {
+        const activeColorRules = (data.colorRules || []).filter(r => r.enabled !== false);
+        const targets = data.colorScopeReplaced ? affectedElements : undefined;
+        applyColorRules(activeColorRules, targets);
+      }
+
+      applyHideRules(data.hideRules || [], data.hideEnabled !== false);
+      applyDisableRules(data.disableRules || [], data.disableEnabled !== false);
+      applySwapRules(data.swapRules || [], data.swapEnabled !== false);
+      applyCustomCssRules(data.customCssRules || [], data.customCssEnabled !== false);
+      applyClassOpsRules(data.classOpsRules || [], data.classOpsEnabled !== false);
+    }
+
+    // Update per-element pre-hide cache for the next page load, then reveal
+    _updatePreHideCache(data);
+    document.getElementById("ext-pre-hide")?.remove();
+    _reveal();
+
+    // Reconnect only after all mutations are done to avoid re-triggering
+    if (document.body) {
+      observer?.observe(document.body, { childList: true, subtree: true });
+    }
+  }); } catch { /* extension context invalidated — stop silently */ }
 }
 
 // ── Element Picker ────────────────────────────────────────────────
@@ -242,7 +419,9 @@ function generateSelector(el) {
   return parts.join(" > ");
 }
 
-let pickMode = false;
+let pickMode    = false;
+let pickContext = null;
+let observer    = null; // declared early so runAll() can reference it safely
 let pickOverlay = null;
 let pickTooltip = null;
 let pickBanner  = null;
@@ -304,7 +483,19 @@ function onPickClick(e) {
   e.stopImmediatePropagation();
   if (!lastHovered) return;
   const selector = generateSelector(lastHovered);
-  chrome.storage.local.set({ pendingHideSelector: { selector, method: "display" } });
+  if (pickContext?.swapRuleId !== undefined) {
+    chrome.storage.local.set({ pendingSwapSelector: { ruleId: pickContext.swapRuleId, selectorIndex: pickContext.selectorIndex, selector } });
+  } else if (pickContext?.customCssRuleId) {
+    chrome.storage.local.set({ pendingCustomCssSelector: { ruleId: pickContext.customCssRuleId, selector } });
+  } else if (pickContext?.classOpsRuleId) {
+    chrome.storage.local.set({ pendingClassOpsSelector: { ruleId: pickContext.classOpsRuleId, selector } });
+  } else if (pickContext?.disableRuleId) {
+    chrome.storage.local.set({ pendingDisableSelector: { ruleId: pickContext.disableRuleId, selector } });
+  } else if (pickContext?.ruleId) {
+    chrome.storage.local.set({ pendingRuleSelector: { ...pickContext, selector } });
+  } else {
+    chrome.storage.local.set({ pendingHideSelector: { selector, method: "display" } });
+  }
   stopPickMode();
 }
 
@@ -312,9 +503,10 @@ function onPickKey(e) {
   if (e.key === "Escape") stopPickMode();
 }
 
-function startPickMode() {
+function startPickMode(context) {
   if (pickMode) return;
-  pickMode = true;
+  pickMode    = true;
+  pickContext = context || null;
   mountPickUI();
   document.body.style.cursor = "crosshair";
   document.addEventListener("mouseover", onPickMove, true);
@@ -333,27 +525,21 @@ function stopPickMode() {
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.action === "startPick") startPickMode();
+  if (msg.action === "startPick") startPickMode(msg.context);
   if (msg.action === "stopPick")  stopPickMode();
 });
 
 // ── Run ───────────────────────────────────────────────────────────
 
-// Run on page load
-runAll();
+// Re-run when storage changes (e.g. user saves new rules)
+chrome.storage.onChanged.addListener(() => { if (chrome?.runtime?.id) runAll(); });
 
-// Re-run when storage changes (e.g. user updates popup settings)
-chrome.storage.onChanged.addListener(() => {
+// runAll() manages observer disconnect/reconnect inside its async callback
+observer = new MutationObserver(runAll);
+
+// At document_start there is no body yet — wait for DOM to be ready before first run
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", runAll);
+} else {
   runAll();
-});
-
-// Observe DOM mutations for dynamically loaded content
-const observer = new MutationObserver(() => {
-  observer.disconnect();
-  runAll();
-  observer.observe(document.body, { childList: true, subtree: true });
-});
-
-if (document.body) {
-  observer.observe(document.body, { childList: true, subtree: true });
 }
